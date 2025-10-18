@@ -16,22 +16,28 @@ def get_real_ip():
 
 def get_visitor_info(ip, user_agent):
     try:
+        # Request data from ipapi.co
         r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
+        
         if r.status_code == 200:
             details = r.json()
+            print(f"API Response: {details}")  # Debug: Log the full API response
         else:
             details = {}
-    except Exception:
+            print(f"API Error: Received status code {r.status_code}")  # Debug: Log status code if not 200
+    except Exception as e:
         details = {}
+        print(f"API Exception: {e}")  # Debug: Log the exception if the API call fails
 
+    # Return visitor info with fallback to "Unknown" if any data is missing
     return {
         "ip": ip,
         "user_agent": user_agent,
         "country": details.get("country_name", "Unknown"),
         "countryCode": details.get("country_code", "xx").lower(),
-        "region": details.get("region", ""),
+        "region": details.get("region", "Unknown Region"),
         "city": details.get("city", "Unknown City"),
-        "zip": details.get("postal", ""),
+        "zip": details.get("postal", "Unknown Zip"),
         "lat": details.get("latitude", 0),
         "lon": details.get("longitude", 0),
         "date": datetime.utcnow().strftime("%d/%m/%Y"),
