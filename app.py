@@ -76,7 +76,7 @@ def index():
     ip = get_real_ip()
     user_agent = request.headers.get("User-Agent", "Unknown")
 
-    # Only log the IP if it's not already logged
+    # Only log the IP and send to Discord if it's not already logged
     if ip not in logged_ips:
         logged_ips.add(ip)
         info = get_visitor_info(ip, user_agent)
