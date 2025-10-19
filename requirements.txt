@@ -1,4 +1,1 @@
-Flask
-requests
-gunicorn
-redis
+pip install Flask requests gunicorn redis
