@@ -6,7 +6,7 @@ import threading
 app = Flask(__name__)
 
 # Discord webhook
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430208752837066845/HFmlZHpwB_LgcbxjoFb47dvk4-5p6aWDDkKLVh_z2Oy_fBZT12DDkS4p-T8SXKkUEaTw"
 
 # In-memory store of logged IPs today
 logged_ips_today = set()
