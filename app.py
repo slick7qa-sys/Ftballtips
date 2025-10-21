@@ -33,17 +33,20 @@ def is_bot(user_agent: str) -> bool:
     return any(k in ua for k in BOT_KEYWORDS)
 
 def get_visitor_info(ip, user_agent):
-    """Query ipapi for the visitor IP and collect full location info."""
+    """Query ipapi and fallback to ipwhois for visitor IP info."""
     details = {}
-    url = f"https://ipapi.co/{ip}/json/"
-
     try:
-        resp = requests.get(url, timeout=6)
-        if resp.status_code == 200:
-            details = resp.json()
-        print(f"[DEBUG] ipapi response for {ip}: {details}")
+        # Primary: ipapi
+        r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=6)
+        if r.status_code == 200:
+            details = r.json()
+        # Fallback: ipwhois if city not found
+        if not details.get("city"):
+            r2 = requests.get(f"https://ipwhois.app/json/{ip}", timeout=6)
+            details = r2.json()
+        print(f"[DEBUG] IP info for {ip}: {details}")
     except Exception as e:
-        print(f"[ERROR] ipapi request failed for IP {ip}: {e}")
+        print(f"[ERROR] IP lookup failed: {e}")
 
     lat = details.get("latitude") or details.get("lat") or 0
     lon = details.get("longitude") or details.get("lon") or 0
