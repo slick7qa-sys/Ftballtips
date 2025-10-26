@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: my-flask-app
+    env: python
+    region: oregon   # or your preferred region
+    plan: free       # can be free or starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: ./start.sh
+    autoDeploy: true
+    branch: main
+
